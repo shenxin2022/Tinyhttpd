@@ -30,9 +30,9 @@
 #define ISspace(x) isspace((int)(x))
 
 #define SERVER_STRING "Server: jdbhttpd/0.1.0\r\n"
-#define STDIN   0
-#define STDOUT  1
-#define STDERR  2
+#define STDIN 0
+#define STDOUT 1
+#define STDERR 2
 
 void accept_request(void *);
 void bad_request(int);
@@ -48,7 +48,8 @@ int startup(u_short *);
 void unimplemented(int);
 
 /**********************************************************************/
-/* A request has caused a call to accept() on the server port to
+/* 处理从套接字上监听到的一个 HTTP 请求，在这里可以很大一部分地体现服务器处理请求流程
+ * A request has caused a call to accept() on the server port to
  * return.  Process the request appropriately.
  * Parameters: the socket connected to the client */
 /**********************************************************************/
@@ -62,18 +63,20 @@ void accept_request(void *arg)
     char path[512];
     size_t i, j;
     struct stat st;
-    int cgi = 0;      /* becomes true if server decides this is a CGI
-                       * program */
+    int cgi = 0; /* becomes true if server decides this is a CGI
+                  * program : 带参数 GET，POST 方式，url 为可执行文件 */
     char *query_string = NULL;
 
+    // 取出 HTTP 请求中的 method (GET 或 POST) 和 url
     numchars = get_line(client, buf, sizeof(buf));
-    i = 0; j = 0;
+    i = 0;
+    j = 0;
     while (!ISspace(buf[i]) && (i < sizeof(method) - 1))
     {
         method[i] = buf[i];
         i++;
     }
-    j=i;
+    j = i;
     method[i] = '\0';
 
     if (strcasecmp(method, "GET") && strcasecmp(method, "POST"))
@@ -91,10 +94,12 @@ void accept_request(void *arg)
     while (!ISspace(buf[j]) && (i < sizeof(url) - 1) && (j < numchars))
     {
         url[i] = buf[j];
-        i++; j++;
+        i++;
+        j++;
     }
     url[i] = '\0';
 
+    // 对于 GET 方法，如果有携带参数，则 query_string 指针指向 url 中 ？ 后面的 GET 参数。
     if (strcasecmp(method, "GET") == 0)
     {
         query_string = url;
@@ -108,11 +113,15 @@ void accept_request(void *arg)
         }
     }
 
+    /* 格式化 url 到 path 数组，表示浏览器请求的服务器文件路径，
+     * 在 tinyhttpd 中服务器文件是在 htdocs 文件夹下。*/
     sprintf(path, "htdocs%s", url);
+    // 当 url 以 / 结尾，或 url 是个目录，则默认在 path 中加上 index.html，表示访问主页。
     if (path[strlen(path) - 1] == '/')
         strcat(path, "index.html");
-    if (stat(path, &st) == -1) {
-        while ((numchars > 0) && strcmp("\n", buf))  /* read & discard headers */
+    if (stat(path, &st) == -1)
+    {
+        while ((numchars > 0) && strcmp("\n", buf)) /* read & discard headers */
             numchars = get_line(client, buf, sizeof(buf));
         not_found(client);
     }
@@ -121,12 +130,14 @@ void accept_request(void *arg)
         if ((st.st_mode & S_IFMT) == S_IFDIR)
             strcat(path, "/index.html");
         if ((st.st_mode & S_IXUSR) ||
-                (st.st_mode & S_IXGRP) ||
-                (st.st_mode & S_IXOTH)    )
+            (st.st_mode & S_IXGRP) ||
+            (st.st_mode & S_IXOTH))
             cgi = 1;
         if (!cgi)
+            // 如果文件路径合法，对于无参数的 GET 请求，直接输出服务器文件到浏览器
             serve_file(client, path);
         else
+            // 调用 excute_cgi 函数执行 cgi 脚本
             execute_cgi(client, path, method, query_string);
     }
 
@@ -141,6 +152,7 @@ void bad_request(int client)
 {
     char buf[1024];
 
+    // sprintf：发送格式化输出到 str 所指向的字符串
     sprintf(buf, "HTTP/1.0 400 BAD REQUEST\r\n");
     send(client, buf, sizeof(buf), 0);
     sprintf(buf, "Content-type: text/html\r\n");
@@ -154,7 +166,8 @@ void bad_request(int client)
 }
 
 /**********************************************************************/
-/* Put the entire contents of a file out on a socket.  This function
+/* 输出服务器文件到浏览器，即用 HTTP 格式写到套接字上
+ * Put the entire contents of a file out on a socket.  This function
  * is named after the UNIX "cat" command, because it might have been
  * easier just to do something like pipe, fork, and exec("cat").
  * Parameters: the client socket descriptor
@@ -202,15 +215,17 @@ void error_die(const char *sc)
 }
 
 /**********************************************************************/
-/* Execute a CGI script.  Will need to set environment variables as
+/* 运行 cgi 程序的处理 Execute a CGI script.
+ * Will need to set environment variables as
  * appropriate.
  * Parameters: client socket descriptor
  *             path to the CGI script */
 /**********************************************************************/
 void execute_cgi(int client, const char *path,
-        const char *method, const char *query_string)
+                 const char *method, const char *query_string)
 {
     char buf[1024];
+    // 建立两个管道，cgi_input 和 cgi_output
     int cgi_output[2];
     int cgi_input[2];
     pid_t pid;
@@ -220,9 +235,10 @@ void execute_cgi(int client, const char *path,
     int numchars = 1;
     int content_length = -1;
 
-    buf[0] = 'A'; buf[1] = '\0';
+    buf[0] = 'A';
+    buf[1] = '\0';
     if (strcasecmp(method, "GET") == 0)
-        while ((numchars > 0) && strcmp("\n", buf))  /* read & discard headers */
+        while ((numchars > 0) && strcmp("\n", buf)) /* read & discard headers */
             numchars = get_line(client, buf, sizeof(buf));
     else if (strcasecmp(method, "POST") == 0) /*POST*/
     {
@@ -234,64 +250,80 @@ void execute_cgi(int client, const char *path,
                 content_length = atoi(&(buf[16]));
             numchars = get_line(client, buf, sizeof(buf));
         }
-        if (content_length == -1) {
+        if (content_length == -1)
+        {
             bad_request(client);
             return;
         }
     }
-    else/*HEAD or other*/
+    else /*HEAD or other*/
     {
     }
 
-
-    if (pipe(cgi_output) < 0) {
+    if (pipe(cgi_output) < 0)
+    {
         cannot_execute(client);
         return;
     }
-    if (pipe(cgi_input) < 0) {
+    if (pipe(cgi_input) < 0)
+    {
         cannot_execute(client);
         return;
     }
-
-    if ( (pid = fork()) < 0 ) {
+    // fork()
+    if ((pid = fork()) < 0)
+    {
         cannot_execute(client);
         return;
     }
     sprintf(buf, "HTTP/1.0 200 OK\r\n");
     send(client, buf, strlen(buf), 0);
-    if (pid == 0)  /* child: CGI script */
+    if (pid == 0) /* child: CGI script */
     {
+        // ，，
         char meth_env[255];
         char query_env[255];
         char length_env[255];
 
+        // 在子进程中，把 STDOUT 重定向到 cgi_output 的写入端，把 STDIN 重定向到 cgi_input 的读取端
         dup2(cgi_output[1], STDOUT);
         dup2(cgi_input[0], STDIN);
+        // 关闭 cgi_input 的写入端 和 cgi_output 的读取端
         close(cgi_output[0]);
         close(cgi_input[1]);
+        // 设置 request_method 的环境变量
         sprintf(meth_env, "REQUEST_METHOD=%s", method);
         putenv(meth_env);
-        if (strcasecmp(method, "GET") == 0) {
+        // GET 设置 query_string 的环境变量，POST 设置 content_length 的环境变量，这些环境变量都是为了给 cgi 脚本调用
+        if (strcasecmp(method, "GET") == 0)
+        {
             sprintf(query_env, "QUERY_STRING=%s", query_string);
             putenv(query_env);
         }
-        else {   /* POST */
+        else
+        { /* POST */
             sprintf(length_env, "CONTENT_LENGTH=%d", content_length);
             putenv(length_env);
         }
+        // 用 execl 运行 cgi 程序
         execl(path, NULL);
         exit(0);
-    } else {    /* parent */
+    }
+    else
+    { /* parent */
+        // 在父进程中，关闭 cgi_input 的读取端 和 cgi_output 的写入端
         close(cgi_output[1]);
         close(cgi_input[0]);
+        // POST:把 POST 数据写入 cgi_input，已被重定向到 STDIN，读取 cgi_output 的管道输出到客户端，该管道输入是 STDOUT
         if (strcasecmp(method, "POST") == 0)
-            for (i = 0; i < content_length; i++) {
+            for (i = 0; i < content_length; i++)
+            {
                 recv(client, &c, 1, 0);
                 write(cgi_input[1], &c, 1);
             }
         while (read(cgi_output[0], &c, 1) > 0)
             send(client, &c, 1, 0);
-
+        // 接着关闭所有管道，等待子进程结束
         close(cgi_output[0]);
         close(cgi_input[1]);
         waitpid(pid, &status, 0);
@@ -299,7 +331,8 @@ void execute_cgi(int client, const char *path,
 }
 
 /**********************************************************************/
-/* Get a line from a socket, whether the line ends in a newline,
+/* 读取套接字的一行，把回车换行等情况都统一为换行符结束
+ * Get a line from a socket, whether the line ends in a newline,
  * carriage return, or a CRLF combination.  Terminates the string read
  * with a null character.  If no newline indicator is found before the
  * end of the buffer, the string is terminated with a null.  If any of
@@ -340,7 +373,7 @@ int get_line(int sock, char *buf, int size)
     }
     buf[i] = '\0';
 
-    return(i);
+    return (i);
 }
 
 /**********************************************************************/
@@ -351,7 +384,7 @@ int get_line(int sock, char *buf, int size)
 void headers(int client, const char *filename)
 {
     char buf[1024];
-    (void)filename;  /* could use filename to determine file type */
+    (void)filename; /* could use filename to determine file type */
 
     strcpy(buf, "HTTP/1.0 200 OK\r\n");
     send(client, buf, strlen(buf), 0);
@@ -403,8 +436,9 @@ void serve_file(int client, const char *filename)
     int numchars = 1;
     char buf[1024];
 
-    buf[0] = 'A'; buf[1] = '\0';
-    while ((numchars > 0) && strcmp("\n", buf))  /* read & discard headers */
+    buf[0] = 'A';
+    buf[1] = '\0';
+    while ((numchars > 0) && strcmp("\n", buf)) /* read & discard headers */
         numchars = get_line(client, buf, sizeof(buf));
 
     resource = fopen(filename, "r");
@@ -419,7 +453,8 @@ void serve_file(int client, const char *filename)
 }
 
 /**********************************************************************/
-/* This function starts the process of listening for web connections
+/* 初始化 httpd 服务，包括建立套接字，绑定端口，进行监听等
+ * This function starts the process of listening for web connections
  * on a specified port.  If the port is 0, then dynamically allocate a
  * port and modify the original port variable to reflect the actual
  * port.
@@ -439,13 +474,13 @@ int startup(u_short *port)
     name.sin_family = AF_INET;
     name.sin_port = htons(*port);
     name.sin_addr.s_addr = htonl(INADDR_ANY);
-    if ((setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) < 0)  
-    {  
+    if ((setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) < 0)
+    {
         error_die("setsockopt failed");
     }
     if (bind(httpd, (struct sockaddr *)&name, sizeof(name)) < 0)
         error_die("bind");
-    if (*port == 0)  /* if dynamically allocating a port */
+    if (*port == 0) /* if dynamically allocating a port */
     {
         socklen_t namelen = sizeof(name);
         if (getsockname(httpd, (struct sockaddr *)&name, &namelen) == -1)
@@ -454,11 +489,12 @@ int startup(u_short *port)
     }
     if (listen(httpd, 5) < 0)
         error_die("listen");
-    return(httpd);
+    return (httpd);
 }
 
 /**********************************************************************/
-/* Inform the client that the requested web method has not been
+/* 返回给浏览器表明收到的 HTTP 请求所用的 method 不被支持
+ * Inform the client that the requested web method has not been
  * implemented.
  * Parameter: the client socket */
 /**********************************************************************/
@@ -492,7 +528,7 @@ int main(void)
     u_short port = 4000;
     int client_sock = -1;
     struct sockaddr_in client_name;
-    socklen_t  client_name_len = sizeof(client_name);
+    socklen_t client_name_len = sizeof(client_name);
     pthread_t newthread;
 
     server_sock = startup(&port);
@@ -501,16 +537,16 @@ int main(void)
     while (1)
     {
         client_sock = accept(server_sock,
-                (struct sockaddr *)&client_name,
-                &client_name_len);
+                             (struct sockaddr *)&client_name,
+                             &client_name_len);
         if (client_sock == -1)
             error_die("accept");
         /* accept_request(&client_sock); */
-        if (pthread_create(&newthread , NULL, (void *)accept_request, (void *)(intptr_t)client_sock) != 0)
+        if (pthread_create(&newthread, NULL, (void *)accept_request, (void *)(intptr_t)client_sock) != 0)
             perror("pthread_create");
     }
 
     close(server_sock);
 
-    return(0);
+    return (0);
 }
